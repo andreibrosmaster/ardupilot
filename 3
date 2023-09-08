@@ -1,0 +1,91 @@
+-- Define parameters
+local speed_min = 1.6
+local take_off_distance = 20
+local iter_average_max = 1000
+local iter_correction_max = 1000
+local distance_min = 20
+local distance_max = 60
+local throttle_variation = 0.1
+
+-- Definethe variables
+local correction = "No"
+local throttle_ini = 0
+local throttle = 0
+local iter_average = 0
+local total_distance = 0
+local iter_correction = 0
+
+function resetCorrection()
+  correction = "No"
+  throttle = throttle_ini
+  iter_correction = 0
+end
+
+function stabilizeAltitude()
+
+  if rangefinder:has_data() then
+    -- Get sensor data
+    local instant_distance = rangefinder:distance_cm_orient(25) / 100 -- 25 is downward facing
+  
+    if instant_distance then
+        local flight_mode = vehicle:get_mode()
+        local speed =  vehicle:get_ground_speed()
+
+        if flight_mode ~= ("QSTABILIZE" or "QHOVER" or "QLOITER" or "QLAND" or "QRTL") and speed > speed_min and instant_distance > take_off_distance then
+            if correction == "No" then -- No correction
+                iter_average = iter_average + 1
+                total_distance = total_distance + instant_distance
+
+                if iter_average == iter_average_max then
+                    local avg_distance = total_distance / iter_average_max
+
+                    if avg_distance <= distance_min then
+                        correction = "Up"  
+                        throttle_ini = throttle
+                        throttle = throttle + (throttle_variation * throttle_ini)
+
+                    elseif avg_distance >= distance_max then
+                        correction = "Down"
+                        throttle_ini = throttle 
+                        throttle = throttle - (throttle_variation * throttle_ini)
+                    end
+
+                    iter_average = 0
+                end
+
+            else -- Correction in progress
+                iter_correction = iter_correction + 1
+
+                if instant_distance > distance_min and instant_distance < distance_max then
+                    resetCorrection()
+                end
+
+                if iter_correction == iter_correction_max then
+                    resetCorrection()
+                end
+            end
+
+        else
+            resetCorrection()
+        end
+
+    else
+        resetCorrection()
+    end
+
+    -- logging the distance and average distance to dataflash logs
+    logger.write("CustomLog", "Distance,AvgDistance", "ff", instant_distance, avg_distance)
+  else
+    gcs:send_text(0, "No RangeFinder") 
+    return false
+  end
+end
+
+function startMission()
+    while true do
+        stabilizeAltitude()
+        vehicle:sleep(1)
+    end
+end
+
+startMission()
